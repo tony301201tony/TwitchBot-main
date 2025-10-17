@@ -85,39 +85,29 @@ async def ochili_command(ctx):
 # 小羽專區 End
   
 # 娜奇專區 Star
-# 讀取次數
-def read_count(file_path):
-    if not os.path.exists(file_path):
-        return 0
-    with open(file_path, "r", encoding="utf-8") as f:
-        return int(f.read().strip() or 0)
-
-# 寫入次數
-def write_count(file_path, count):
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(str(count))
-
 # --- Google Sheets 認證函式 ---
 def get_gspread_client():
     # 從 Render 環境變數中讀取 JSON 憑證
     creds_json = os.environ.get("GSPREAD_CREDENTIALS")
     
     if not creds_json:
-        print("GSPREAD_CREDENTIALS 環境變數未設定！")
+        print("❌ 致命錯誤：GSPREAD_CREDENTIALS 環境變數未設定！")
         return None
     
     try:
         # 將 JSON 字串轉換為 Python 字典
         creds_dict = json.loads(creds_json)
         
-        # 使用字典中的憑證進行認證 (這是雲端環境推薦的做法)
+        # 使用字典中的憑證進行認證
         client = gspread.service_account_from_dict(creds_dict)
+        print("✅ 成功初始化 Google Sheets 客戶端！")
         return client
     except Exception as e:
-        print(f"Gspread client 認證失敗: {e}")
+        # 關鍵錯誤輸出
+        print(f"❌ 致命錯誤：Gspread client 認證失敗！請檢查 JSON 憑證格式。原始錯誤: {e}")
         return None
     
-# 輔助函數：根據計數名稱，確定對應的欄位索引 (例如 B2 或 C2)
+# 輔助函數：根據計數名稱，確定對應的欄位索引 (B 欄或 C 欄)
 def get_column_index(count_type):
     if count_type == "nachi":
         return NACHI_COUNT_COL
@@ -135,7 +125,8 @@ def read_sheet_count(client, channel_name, count_type):
         spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
         
-        # 1. 查找頻道所在的行 (A 欄)
+        # 1. 在 CHANNEL_COL (A 欄) 查找頻道名稱
+        # 這裡會查找 A1 以下的內容
         channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL) 
         
         if channel_cell:
@@ -143,12 +134,13 @@ def read_sheet_count(client, channel_name, count_type):
             value_cell = worksheet.cell(channel_cell.row, col_index)
             value = value_cell.value
             
+            # 確保讀取到的值是數字
             if value and str(value).isdigit():
                 return int(value)
             
         return 0 
     except Exception as e:
-        print(f"Error reading {count_type} for {channel_name}: {e}")
+        print(f"❌ 致命錯誤：讀取 Google Sheets 失敗！原始錯誤: {e}")
         return 0
 
 # 函數：寫入/更新特定頻道的特定計數
@@ -168,19 +160,21 @@ def write_sheet_count(client, channel_name, new_count, count_type):
             # 2. 如果找到，更新該行對應欄位 (B 欄或 C 欄) 的值
             worksheet.update_cell(channel_cell.row, col_index, new_count)
         else:
-            # 3. 找不到該頻道，則在表格末尾新增一行 (只有 Channel 名稱和該計數)
-            # 必須為新增的行創建一個包含所有欄位的列表
-            new_row = ["" for _ in range(NASHANAGI_COUNT_COL)] # 創建一個空列表
-            new_row[CHANNEL_COL - 1] = channel_name # 填入頻道名 (A 欄)
-            new_row[col_index - 1] = new_count # 填入計數值 (B 或 C 欄)
+            # 3. 找不到該頻道，則在表格末尾新增一行 
+            # 創建一個長度為 NASHANAGI_COUNT_COL (即 3) 的列表
+            new_row = ["" for _ in range(NASHANAGI_COUNT_COL)]
+            new_row[CHANNEL_COL - 1] = channel_name # A 欄填入頻道名
+            new_row[col_index - 1] = new_count # 對應的 B 或 C 欄填入計數值
             worksheet.append_row(new_row)
             
-        print(f"成功更新 Google Sheet：{channel_name} - {count_type} -> {new_count}")
+        print(f"✅ 成功更新 Google Sheet：{channel_name} - {count_type} -> {new_count}")
 
         return True
     except Exception as e:
-        print(f"Error writing {count_type} for {channel_name}: {e}")
+        # 關鍵錯誤輸出
+        print(f"❌ 致命錯誤：寫入 Google Sheets 失敗！原始錯誤: {e}")
         return False
+# ------------------------------------ Google Sheets 持久化儲存區 End --------------------------------------
     
 # 修復後的 !娜奇 指令
 @bot.command(name="娜奇")
