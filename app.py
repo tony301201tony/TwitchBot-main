@@ -121,7 +121,7 @@ def read_sheet_value(client, channel_name, col_index, is_number=True):
         sheet_id = get_spreadsheet_id()
         spreadsheet = client.open_by_key(sheet_id)
         # 假設您使用中文工作表名稱
-        worksheet = spreadsheet.worksheet("工作表1") 
+        worksheet = spreadsheet.worksheet("Sheet1") 
 
         # 1. 查找頻道所在的行 (A 欄)
         channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL)
@@ -153,7 +153,7 @@ def write_sheet_value(client, channel_name, value_to_write, col_index):
         sheet_id = get_spreadsheet_id()
         spreadsheet = client.open_by_key(sheet_id)
         # 假設您使用中文工作表名稱
-        worksheet = spreadsheet.worksheet("工作表1") 
+        worksheet = spreadsheet.worksheet("Sheet1") 
 
         # 1. 查找頻道所在的行 (A 欄)
         channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL)
