@@ -4,6 +4,8 @@ import random
 import time
 import os
 import asyncio
+import gspread  # 新增
+import json     # 新增
 
 # 儲存遊戲狀態
 games = {}
@@ -19,6 +21,12 @@ users = {}
 COOLDOWN_TIME = 5  # 每人 5 秒 CD
 # 使用者開關
 useropen ={}
+
+# app.py 頂部或其他設定區塊
+CHANNEL_COL = 1      # 頻道名稱 (A 欄)
+NACHI_COUNT_COL = 2  # 娜奇計數 (B 欄)
+NASHANAGI_COUNT_COL = 3 # 娜吉計數 (C 欄) 
+COUNT_KEY = "Nachi_Count" # 定義計數的名稱 (如果 B1 是這個標題)
 
 # 檢查是否允許發言
 def can_send_message(username):
@@ -44,6 +52,7 @@ bot = commands.Bot(
     prefix='!',
     initial_channels=[CHANNEL1,CHANNEL2,CHANNEL3,CHANNEL4,CHANNEL5,CHANNEL6]
 )
+
 
 @bot.command(name="呼吸", aliases=["氧氣瓶","拔管","斷氣"])
 async def oxygen_command(ctx):
@@ -88,30 +97,119 @@ def write_count(file_path, count):
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(str(count))
 
+# --- Google Sheets 認證函式 ---
+def get_gspread_client():
+    # 從 Render 環境變數中讀取 JSON 憑證
+    creds_json = os.environ.get("GSPREAD_CREDENTIALS")
+    
+    if not creds_json:
+        print("GSPREAD_CREDENTIALS 環境變數未設定！")
+        return None
+    
+    try:
+        # 將 JSON 字串轉換為 Python 字典
+        creds_dict = json.loads(creds_json)
+        
+        # 使用字典中的憑證進行認證 (這是雲端環境推薦的做法)
+        client = gspread.service_account_from_dict(creds_dict)
+        return client
+    except Exception as e:
+        print(f"Gspread client 認證失敗: {e}")
+        return None
+    
+# 輔助函數：根據計數名稱，確定對應的欄位索引 (例如 B2 或 C2)
+def get_column_index(count_type):
+    if count_type == "nachi":
+        return NACHI_COUNT_COL
+    elif count_type == "nashanagi":
+        return NASHANAGI_COUNT_COL
+    return None
+
+# 函數：讀取特定頻道的特定計數
+def read_sheet_count(client, channel_name, count_type):
+    col_index = get_column_index(count_type)
+    if col_index is None: return 0
+
+    try:
+        sheet_id = os.environ.get("SPREADSHEET_ID")
+        spreadsheet = client.open_by_key(sheet_id)
+        worksheet = spreadsheet.sheet1
+        
+        # 1. 查找頻道所在的行 (A 欄)
+        channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL) 
+        
+        if channel_cell:
+            # 2. 讀取該行對應欄位 (B 欄或 C 欄) 的值
+            value_cell = worksheet.cell(channel_cell.row, col_index)
+            value = value_cell.value
+            
+            if value and str(value).isdigit():
+                return int(value)
+            
+        return 0 
+    except Exception as e:
+        print(f"Error reading {count_type} for {channel_name}: {e}")
+        return 0
+
+# 函數：寫入/更新特定頻道的特定計數
+def write_sheet_count(client, channel_name, new_count, count_type):
+    col_index = get_column_index(count_type)
+    if col_index is None: return False
+
+    try:
+        sheet_id = os.environ.get("SPREADSHEET_ID")
+        spreadsheet = client.open_by_key(sheet_id)
+        worksheet = spreadsheet.sheet1
+
+        # 1. 查找頻道所在的行 (A 欄)
+        channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL)
+        
+        if channel_cell:
+            # 2. 如果找到，更新該行對應欄位 (B 欄或 C 欄) 的值
+            worksheet.update_cell(channel_cell.row, col_index, new_count)
+        else:
+            # 3. 找不到該頻道，則在表格末尾新增一行 (只有 Channel 名稱和該計數)
+            # 必須為新增的行創建一個包含所有欄位的列表
+            new_row = ["" for _ in range(NASHANAGI_COUNT_COL)] # 創建一個空列表
+            new_row[CHANNEL_COL - 1] = channel_name # 填入頻道名 (A 欄)
+            new_row[col_index - 1] = new_count # 填入計數值 (B 或 C 欄)
+            worksheet.append_row(new_row)
+            
+        print(f"成功更新 Google Sheet：{channel_name} - {count_type} -> {new_count}")
+
+        return True
+    except Exception as e:
+        print(f"Error writing {count_type} for {channel_name}: {e}")
+        return False
+    
+# 修復後的 !娜奇 指令
 @bot.command(name="娜奇")
 async def nachi_command(ctx):
-    channel = ctx.channel.name
-    if channel.lower() == "bcatshanachie":
-        people = get_user(channel, ctx.author.name)
-        
-        # 更新次數
-        file_path = "nachi_count.txt"
-        count = read_count(file_path) + 1
-        write_count(file_path, count)
-
-        await ctx.send(f" 這是我們第 {count} 次呼喊娜奇了，臭肥宅聽到我們的呼喚了嗎？")
-
+    global gspread_client 
+    channel_name = ctx.channel.name.lower()
+    
+    # 保持頻道限定 (如果需要的話，這裡可以移除限定，讓所有頻道都計數)
+    if channel_name == "bcatshanachie":
+        if gspread_client:
+            # 【修正點】: 補上 count_type 參數 "nachi"
+            count = read_sheet_count(gspread_client, channel_name, "nachi") + 1
+            write_sheet_count(gspread_client, channel_name, count, "nachi")
+            
+            await ctx.send(f" 這是我們第 {count} 次呼喊娜奇了，臭肥宅聽到我們的呼喚了嗎？")
+            
+# 修復後的 !夏娜吉 指令 (確保邏輯完整)
 @bot.command(name="夏娜吉")
 async def nachiji_command(ctx):
-    channel = ctx.channel.name
-    if channel.lower() == "bcatshanachie":
-        people = get_user(channel, ctx.author.name)
-        
-        # 更新次數
-        file_path = "nashanagi_count.txt"
-        count = read_count(file_path) + 1
-        write_count(file_path, count)
-        await ctx.send(f" 這是我們第 {count} 次呼喊娜吉了，娜吉不要再叫了！！ bcatshChiwawa bcatshChiwawa ")
+    global gspread_client 
+    channel_name = ctx.channel.name.lower()
+    
+    if channel_name == "bcatshanachie": # 保持原有的頻道限定
+        if gspread_client:
+            # 【修正點】: 補上 count_type 參數 "nashanagi"
+            count = read_sheet_count(gspread_client, channel_name, "nashanagi") + 1
+            write_sheet_count(gspread_client, channel_name, count, "nashanagi")
+            
+            await ctx.send(f" 這是我們第 {count} 次呼喊娜吉了，娜吉不要再叫了！！ bcatshChiwawa bcatshChiwawa ")
         
         
 # 指令：新增或更新歷年獎勵
@@ -538,5 +636,12 @@ def get_game(channel, gametype):
 
         
 if __name__ == "__main__":
+    global gspread_client # 宣告要修改全域變數
+    
+    # 步驟 1: 初始化 Gspread 客戶端
+    gspread_client = get_gspread_client()
+    if gspread_client is None:
+        print("警告：Google Sheets 連線失敗，機器人將無法記錄永久次數！")
+        
     keep_alive()
     bot.run()
