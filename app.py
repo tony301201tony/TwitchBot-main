@@ -1,4 +1,5 @@
 from twitchio.ext import commands
+from keep_alive import keep_alive
 import random
 import time
 import os
@@ -537,4 +538,5 @@ def get_game(channel, gametype):
 
         
 if __name__ == "__main__":
+    keep_alive()
     bot.run()
