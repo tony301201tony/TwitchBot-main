@@ -125,20 +125,28 @@ def read_sheet_count(client, channel_name, count_type):
         spreadsheet = client.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
         
-        # 1. 在 CHANNEL_COL (A 欄) 查找頻道名稱
-        # 這裡會查找 A1 以下的內容
+        # 1. 查找頻道名稱 (忽略標題行 A1)
+        # gspread 的 find 會從第一行開始，這可能導致它找到 A1 的 "Channel"
+        # 我們手動指定從第二行開始找，但 gspread 的 find 預設會找遍整個範圍。
+        # 更好的方法是使用 worksheet.col_values(CHANNEL_COL)[1:] 進行本地查找
+
+        # 這裡我們依靠 worksheet.find，並假設它從第二行開始找實際數據
         channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL) 
         
-        if channel_cell:
-            # 2. 讀取該行對應欄位 (B 欄或 C 欄) 的值
+        if channel_cell and channel_cell.row > 1: # 確保不是標題行 (A1)
+            # 讀取該行對應欄位的值
             value_cell = worksheet.cell(channel_cell.row, col_index)
             value = value_cell.value
             
-            # 確保讀取到的值是數字
-            if value and str(value).isdigit():
-                return int(value)
+            # 確保讀取到的值是數字 (即使它是字串格式)
+            if value:
+                try:
+                    return int(value)
+                except ValueError:
+                    print(f"警告: 讀取到非數字值 '{value}', 該計數將從 0 開始。")
+                    return 0
             
-        return 0 
+        return 0 # 找不到頻道或計數值為空
     except Exception as e:
         print(f"❌ 致命錯誤：讀取 Google Sheets 失敗！原始錯誤: {e}")
         return 0
