@@ -26,7 +26,7 @@ useropen ={}
 CHANNEL_COL = 1      # 頻道名稱 (A 欄)
 NACHI_COUNT_COL = 2  # 娜奇計數 (B 欄)
 NASHANAGI_COUNT_COL = 3 # 娜吉計數 (C 欄) 
-REWARDS_CONTENT_COL = 4 # 【新增】歷年獎勵內容 (D 欄)
+COUNT_KEY = "Nachi_Count" # 定義計數的名稱 (如果 B1 是這個標題)
 
 # 檢查是否允許發言
 def can_send_message(username):
@@ -115,140 +115,153 @@ def get_column_index(count_type):
         return NASHANAGI_COUNT_COL
     return None
 
-# 函數：通用讀取函式 (可讀取數字或文字)
-def read_sheet_value(client, channel_name, col_index, is_number=True):
+# 函數：讀取特定頻道的特定計數
+def read_sheet_count(client, channel_name, count_type):
+    col_index = get_column_index(count_type)
+    if col_index is None: return 0
+
     try:
-        sheet_id = get_spreadsheet_id()
+        sheet_id = os.environ.get("SPREADSHEET_ID")
         spreadsheet = client.open_by_key(sheet_id)
-        # 假設您使用中文工作表名稱
-        worksheet = spreadsheet.worksheet("Sheet1") 
+        worksheet = spreadsheet.sheet1
+        
+        # 1. 查找頻道名稱 (忽略標題行 A1)
+        # gspread 的 find 會從第一行開始，這可能導致它找到 A1 的 "Channel"
+        # 我們手動指定從第二行開始找，但 gspread 的 find 預設會找遍整個範圍。
+        # 更好的方法是使用 worksheet.col_values(CHANNEL_COL)[1:] 進行本地查找
 
-        # 1. 查找頻道所在的行 (A 欄)
-        channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL)
-
-        if channel_cell and channel_cell.row > 1:
-            # 2. 讀取對應欄位的值
-            value = worksheet.cell(channel_cell.row, col_index).value
+        # 這裡我們依靠 worksheet.find，並假設它從第二行開始找實際數據
+        channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL) 
+        
+        if channel_cell and channel_cell.row > 1: # 確保不是標題行 (A1)
+            # 讀取該行對應欄位的值
+            value_cell = worksheet.cell(channel_cell.row, col_index)
+            value = value_cell.value
             
-            if is_number:
-                # 處理數字 (計數器)
-                if value:
-                    try:
-                        return int(value)
-                    except ValueError:
-                        return 0 # 讀到非數字，視為 0
-                return 0
-            else:
-                # 處理文字 (歷年獎勵)
-                return value if value else ""
+            # 確保讀取到的值是數字 (即使它是字串格式)
+            if value:
+                try:
+                    return int(value)
+                except ValueError:
+                    print(f"警告: 讀取到非數字值 '{value}', 該計數將從 0 開始。")
+                    return 0
             
-        return 0 if is_number else ""
+        return 0 # 找不到頻道或計數值為空
     except Exception as e:
-        print(f"❌ 致命錯誤：通用讀取失敗！原始錯誤: {e}")
-        return 0 if is_number else ""
+        print(f"❌ 致命錯誤：讀取 Google Sheets 失敗！原始錯誤: {e}")
+        return 0
 
-# 函數：通用寫入函式 (處理計數和文字)
-def write_sheet_value(client, channel_name, value_to_write, col_index):
+# 函數：寫入/更新特定頻道的特定計數
+def write_sheet_count(client, channel_name, new_count, count_type):
+    col_index = get_column_index(count_type)
+    if col_index is None: return False
+
     try:
-        sheet_id = get_spreadsheet_id()
+        sheet_id = os.environ.get("SPREADSHEET_ID")
         spreadsheet = client.open_by_key(sheet_id)
-        # 假設您使用中文工作表名稱
-        worksheet = spreadsheet.worksheet("Sheet1") 
+        worksheet = spreadsheet.sheet1
 
         # 1. 查找頻道所在的行 (A 欄)
         channel_cell = worksheet.find(channel_name, in_column=CHANNEL_COL)
         
         if channel_cell:
-            # 2. 如果找到，更新該行對應欄位的值
-            worksheet.update_cell(channel_cell.row, col_index, value_to_write)
+            # 2. 如果找到，更新該行對應欄位 (B 欄或 C 欄) 的值
+            worksheet.update_cell(channel_cell.row, col_index, new_count)
         else:
-            # 3. 找不到頻道，在表格末尾新增一行 
-            # 必須確保新增的列表長度至少到目標欄位 col_index
-            new_row = ["" for _ in range(col_index)] 
+            # 3. 找不到該頻道，則在表格末尾新增一行 
+            # 創建一個長度為 NASHANAGI_COUNT_COL (即 3) 的列表
+            new_row = ["" for _ in range(NASHANAGI_COUNT_COL)]
             new_row[CHANNEL_COL - 1] = channel_name # A 欄填入頻道名
-            new_row[col_index - 1] = value_to_write # 對應欄位填入值
+            new_row[col_index - 1] = new_count # 對應的 B 或 C 欄填入計數值
             worksheet.append_row(new_row)
             
-        print(f"✅ 成功更新 Google Sheet 欄位 {col_index}：{channel_name} -> {value_to_write}")
+        print(f"✅ 成功更新 Google Sheet：{channel_name} - {count_type} -> {new_count}")
+
         return True
     except Exception as e:
-        print(f"❌ 致命錯誤：通用寫入失敗！原始錯誤: {e}")
+        # 關鍵錯誤輸出
+        print(f"❌ 致命錯誤：寫入 Google Sheets 失敗！原始錯誤: {e}")
         return False
 # ------------------------------------ Google Sheets 持久化儲存區 End --------------------------------------
     
-# 替換後的 !娜奇 指令
+# 修復後的 !娜奇 指令
 @bot.command(name="娜奇")
 async def nachi_command(ctx):
     global gspread_client 
     channel_name = ctx.channel.name.lower()
     
+    # 保持頻道限定 (如果需要的話，這裡可以移除限定，讓所有頻道都計數)
     if channel_name == "bcatshanachie":
         if gspread_client:
-            # 使用通用函式讀取數字，並傳遞 NACHI_COUNT_COL
-            count = read_sheet_value(gspread_client, channel_name, NACHI_COUNT_COL, is_number=True) + 1
-            write_sheet_value(gspread_client, channel_name, count, NACHI_COUNT_COL)
+            # 【修正點】: 補上 count_type 參數 "nachi"
+            count = read_sheet_count(gspread_client, channel_name, "nachi") + 1
+            write_sheet_count(gspread_client, channel_name, count, "nachi")
             
             await ctx.send(f" 這是我們第 {count} 次呼喊娜奇了，臭肥宅聽到我們的呼喚了嗎？")
             
-# app.py 中 @bot.command(name="夏娜吉") 的替換程式碼
+# 修復後的 !夏娜吉 指令 (確保邏輯完整)
 @bot.command(name="夏娜吉")
 async def nachiji_command(ctx):
     global gspread_client 
     channel_name = ctx.channel.name.lower()
     
-    # 保持原有的頻道限定
-    if channel_name == "bcatshanachie":
+    if channel_name == "bcatshanachie": # 保持原有的頻道限定
         if gspread_client:
-            # 使用通用函式讀取數字 (is_number=True 是預設值，這裡可以省略但為了清晰度保留)
-            # 讀取 NASHANAGI_COUNT_COL (即 C 欄)
-            count = read_sheet_value(gspread_client, channel_name, NASHANAGI_COUNT_COL, is_number=True) + 1
-            
-            # 寫入新的計數值到 C 欄
-            write_sheet_value(gspread_client, channel_name, count, NASHANAGI_COUNT_COL)
+            # 【修正點】: 補上 count_type 參數 "nashanagi"
+            count = read_sheet_count(gspread_client, channel_name, "nashanagi") + 1
+            write_sheet_count(gspread_client, channel_name, count, "nashanagi")
             
             await ctx.send(f" 這是我們第 {count} 次呼喊娜吉了，娜吉不要再叫了！！ bcatshChiwawa bcatshChiwawa ")
-            
-# 替換後的 !歷年訂閱獎勵 指令
-@bot.command(name="歷年訂閱獎勵")
-async def read_rewards(ctx):
-    global gspread_client 
-    channel_name = ctx.channel.name.lower()
-    
-    if channel_name == "bcatshanachie":
-        if gspread_client:
-            # 使用通用函式讀取文字，並傳遞 REWARDS_CONTENT_COL
-            content = read_sheet_value(gspread_client, channel_name, REWARDS_CONTENT_COL, is_number=False)
-            
-            if content and content.strip():
-                await ctx.send(content)
-            else:
-                await ctx.send(f"⚠️ {channel_name} 的歷年獎勵目前沒有內容。")
-
-# 替換後的 !歷年獎勵添加 指令
+        
+        
+# 指令：新增或更新歷年獎勵
 @bot.command(name="歷年獎勵添加")
 async def add_rewards(ctx):
-    global gspread_client 
-    channel_name = ctx.channel.name.lower()
-    
-    if channel_name == "bcatshanachie":
-        people = get_user(channel_name, ctx.author.name)
-        
-        # ... (台主檢查邏輯不變)
+    channel = ctx.channel.name
+    if channel.lower() == "bcatshanachie":
+        people = get_user(channel, ctx.author.name)
+        # 只允許台主新增
+        if people['name'].lower() != channel.lower():
+            await ctx.send(f"⚠️ {people['name']} 只有台主可以新增歷年獎勵！")
+            return
 
-        # 取得內容 (content)
+        # 取得內容
         parts = ctx.message.content.strip().split(" ", 1)
         if len(parts) < 2:
             await ctx.send("⚠️ 使用方式： !歷年獎勵添加 <內容>")
             return
         content = parts[1]
 
-        if gspread_client:
-            # 使用通用函式寫入文字，並傳遞 REWARDS_CONTENT_COL
-            success = write_sheet_value(gspread_client, channel_name, content, REWARDS_CONTENT_COL)
-            if success:
-                await ctx.send(f"✅ {channel_name} 的歷年獎勵已更新完成！")
-            else:
-                 await ctx.send(f"❌ 歷年獎勵更新失敗，請聯繫 Bot 管理員。")
+        # 檔案路徑
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, f"{channel}.txt")
+
+        # 寫入檔案（覆蓋）
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        await ctx.send(f"✅ {channel} 的歷年獎勵已更新完成！")
+
+# 指令：讀取歷年訂閱獎勵
+@bot.command(name="歷年訂閱獎勵")
+async def read_rewards(ctx):
+    channel = ctx.channel.name
+    if channel.lower() == "bcatshanachie":
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, f"{channel}.txt")
+
+        if not os.path.exists(file_path):
+            await ctx.send(f"⚠️ {channel} 的歷年獎勵檔案不存在。")
+            return
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+        if content:
+            await ctx.send(content)
+        else:
+            await ctx.send(f"⚠️ {channel} 的歷年獎勵檔案是空的。")     
 # 娜奇專區 End
 
 #------------------------------------------------遊戲區---------------------------------------------------
